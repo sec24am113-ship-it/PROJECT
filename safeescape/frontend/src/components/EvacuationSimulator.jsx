@@ -209,12 +209,102 @@ export default function EvacuationSimulator() {
     paintCell(r, c);
   };
 
+  // Define cellEmoji first (no dependencies)
+  const cellEmoji = (display) => {
+    if (display === EXIT) return "🚪";
+    if (display === PERSON) return "🧍";
+    if (display === "safe_person") return "✅";
+    if (display === "lost_person") return "💀";
+    if (display === FIRE) return step % 2 === 0 ? "🔥" : "🌋";
+    if (display === PATH) return "·";
+    if (display === "stairs") return "🪜";
+    return "";
+  };
+
+  // Define cellStyle (no hook dependencies)  
+  const cellStyle = (display, r, c, hover, phase, step) => {
+    const isHovered = hover && hover[0] === r && hover[1] === c && phase === "build";
+    let bg = COLORS[display] || COLORS.empty;
+    let border = "transparent";
+    let glow = "";
+    let opacity = 1;
+
+    if (display === FIRE) {
+      bg = `hsl(${15 + ((r * c * step) % 20)}, 100%, ${35 + ((step % 3) * 5)}%)`;
+      glow = `0 0 12px 3px rgba(255,80,0,0.6)`;
+      border = COLORS.fireBorder;
+    } else if (display === "safe_person") {
+      bg = "#00cc66";
+      glow = "0 0 8px 2px rgba(0,200,100,0.5)";
+    } else if (display === "lost_person") {
+      bg = "#880000";
+      glow = "0 0 8px 2px rgba(200,0,0,0.5)";
+    } else if (display === PERSON) {
+      glow = "0 0 10px 2px rgba(96,184,255,0.6)";
+    } else if (display === EXIT) {
+      glow = "0 0 10px 3px rgba(0,255,136,0.5)";
+    } else if (display === PATH) {
+      bg = "#1a1600";
+      border = "#ffd700";
+      glow = "0 0 6px 1px rgba(255,215,0,0.3)";
+    } else if (display === "stairs") {
+      bg = "#6600cc";
+      glow = "0 0 8px 2px rgba(102,0,204,0.5)";
+      border = "#9933ff";
+    }
+
+    if (isHovered) {
+      glow = "0 0 0 2px #ffffff44 inset";
+      opacity = 0.8;
+    }
+
+    return {
+      width: CELL,
+      height: CELL,
+      backgroundColor: bg,
+      border: `1px solid ${border === "transparent" ? (display === EMPTY ? "#0f1520" : "#1e3050") : border}`,
+      boxShadow: glow,
+      opacity,
+      cursor: phase === "build" ? "crosshair" : "default",
+      transition: "background-color 0.3s, box-shadow 0.3s",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: 18,
+      userSelect: "none",
+      position: "relative",
+    };
+  };
+
+  // Define getDisplay (useCallback, depends on grid/fireSet/persons/paths/phase/currentFloor)
+  const getDisplay = useCallback((r, c) => {
+    const cell = grid[r][c];
+    
+    if (phase === "simulate") {
+      if (fireSet.has(`${r},${c},${currentFloor}`)) return FIRE;
+      
+      const personHere = persons.find(
+        p => p.r === r && p.c === c && p.floor === currentFloor
+      );
+      if (personHere) {
+        if (personHere.reached) return "safe_person";
+        if (personHere.lost) return "lost_person";
+        return PERSON;
+      }
+      
+      if (paths.some(p => p[0] === r && p[1] === c && p[2] === currentFloor) && cell === ROOM) {
+        return PATH;
+      }
+    }
+    return cell;
+  }, [grid, fireSet, persons, paths, phase, currentFloor]);
+
   // Optimize cell style calculation with useMemo
   const memoizedCellStyle = useCallback((display, r, c) => {
     return cellStyle(display, r, c);
   }, [hover, phase, step, currentFloor]);
 
-  // Draw individual cell - no clearRect needed since solid rectangles overwrite
+  // NOW define drawCell (useCallback, depends on getDisplay, cellStyle, cellEmoji)
   const drawCell = useCallback((ctx, r, c) => {
     const display = getDisplay(r, c);
     const style = cellStyle(display, r, c, hover, phase, step);
@@ -249,18 +339,20 @@ export default function EvacuationSimulator() {
     if (!ctx) return;
 
     const drawGrid = () => {
-      if (!drawnOnceRef.current) {
-        // First render: draw all cells, no clearRect
+      if (!drawnOnceRef.current || phase === 'simulate') {
+        // Full redraw on first render OR any simulation tick
         canvas.width = COLS * CELL;
         canvas.height = ROWS * CELL;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
         for (let r = 0; r < ROWS; r++) {
           for (let c = 0; c < COLS; c++) {
             drawCell(ctx, r, c);
           }
         }
         drawnOnceRef.current = true;
+        dirtyRef.current.clear();
       } else {
-        // Subsequent renders: only repaint dirty cells
+        // Build mode only: repaint dirty cells
         for (const key of dirtyRef.current) {
           const [r, c] = key.split(',').map(Number);
           drawCell(ctx, r, c);
@@ -385,6 +477,9 @@ export default function EvacuationSimulator() {
     setRunning(false);
     setFireOrigin(null);
     setLog([]);
+    // Clear dirty cell tracking to force full redraw
+    dirtyRef.current.clear();
+    drawnOnceRef.current = false;
   };
 
   const clearAll = () => {
@@ -461,93 +556,6 @@ export default function EvacuationSimulator() {
       );
     }
   }, [persons, phase]);
-
-  const getDisplay = useCallback((r, c) => {
-    const cell = grid[r][c];
-    
-    if (phase === "simulate") {
-      if (fireSet.has(`${r},${c},${currentFloor}`)) return FIRE;
-      
-      const personHere = persons.find(
-        p => p.r === r && p.c === c && p.floor === currentFloor
-      );
-      if (personHere) {
-        if (personHere.reached) return "safe_person";
-        if (personHere.lost) return "lost_person";
-        return PERSON;
-      }
-      
-      if (paths.some(p => p[0] === r && p[1] === c && p[2] === currentFloor) && cell === ROOM) {
-        return PATH;
-      }
-    }
-    return cell;
-  }, [grid, fireSet, persons, paths, phase, currentFloor]);
-
-  const cellStyle = (display, r, c, hover, phase, step) => {
-    const isHovered = hover && hover[0] === r && hover[1] === c && phase === "build";
-    let bg = COLORS[display] || COLORS.empty;
-    let border = "transparent";
-    let glow = "";
-    let opacity = 1;
-
-    if (display === FIRE) {
-      bg = `hsl(${15 + ((r * c * step) % 20)}, 100%, ${35 + ((step % 3) * 5)}%)`;
-      glow = `0 0 12px 3px rgba(255,80,0,0.6)`;
-      border = COLORS.fireBorder;
-    } else if (display === "safe_person") {
-      bg = "#00cc66";
-      glow = "0 0 8px 2px rgba(0,200,100,0.5)";
-    } else if (display === "lost_person") {
-      bg = "#880000";
-      glow = "0 0 8px 2px rgba(200,0,0,0.5)";
-    } else if (display === PERSON) {
-      glow = "0 0 10px 2px rgba(96,184,255,0.6)";
-    } else if (display === EXIT) {
-      glow = "0 0 10px 3px rgba(0,255,136,0.5)";
-    } else if (display === PATH) {
-      bg = "#1a1600";
-      border = "#ffd700";
-      glow = "0 0 6px 1px rgba(255,215,0,0.3)";
-    } else if (display === "stairs") {
-      bg = "#6600cc";
-      glow = "0 0 8px 2px rgba(102,0,204,0.5)";
-      border = "#9933ff";
-    }
-
-    if (isHovered) {
-      glow = "0 0 0 2px #ffffff44 inset";
-      opacity = 0.8;
-    }
-
-    return {
-      width: CELL,
-      height: CELL,
-      backgroundColor: bg,
-      border: `1px solid ${border === "transparent" ? (display === EMPTY ? "#0f1520" : "#1e3050") : border}`,
-      boxShadow: glow,
-      opacity,
-      cursor: phase === "build" ? "crosshair" : "default",
-      transition: "background-color 0.3s, box-shadow 0.3s",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      fontSize: 18,
-      userSelect: "none",
-      position: "relative",
-    };
-  };
-
-  const cellEmoji = (display) => {
-    if (display === EXIT) return "🚪";
-    if (display === PERSON) return "🧍";
-    if (display === "safe_person") return "✅";
-    if (display === "lost_person") return "💀";
-    if (display === FIRE) return step % 2 === 0 ? "🔥" : "🌋";
-    if (display === PATH) return "·";
-    if (display === "stairs") return "🪜";
-    return "";
-  };
 
   const safe = persons.filter((p) => p.reached).length;
   const lost = persons.filter((p) => p.lost).length;
