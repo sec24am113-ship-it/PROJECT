@@ -59,8 +59,8 @@ class FireEngine:
                 # Fire room: spread to adjacent
                 new_heat[room_id] = 1.0
 
-                # Try to spread to adjacent rooms
-                for adjacent_room in self.graph.get_adjacent_safe_rooms(room_id):
+                # Try to spread to adjacent rooms (including blocked rooms)
+                for adjacent_room in self.graph.get_adjacent_rooms(room_id):
                     if adjacent_room not in self.fire_rooms:
                         # Spread fire with probability based on heat
                         new_heat_value = min(1.0, current_heat * 0.8)

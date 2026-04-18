@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import './GridEditor.css'
 
 /**
@@ -27,15 +27,57 @@ function GridEditor({ onLayoutGenerated }) {
       .map(() => Array(GRID_SIZE).fill(CELL_TYPES.empty))
   )
   const [selectedTool, setSelectedTool] = useState(CELL_TYPES.room)
+  const isDrawingRef = useRef(false)
+
+  /**
+   * Draw on a cell
+   */
+  const drawCell = (row, col) => {
+    setGrid((prevGrid) => {
+      const newGrid = prevGrid.map((r) => [...r])
+      newGrid[row][col] = selectedTool
+      return newGrid
+    })
+  }
 
   /**
    * Handle cell click to draw
    */
   const handleCellClick = (row, col) => {
-    const newGrid = grid.map((r) => [...r])
-    newGrid[row][col] = selectedTool
-    setGrid(newGrid)
+    drawCell(row, col)
   }
+
+  /**
+   * Handle mouse down to start drawing
+   */
+  const handleMouseDown = (row, col) => {
+    isDrawingRef.current = true
+    drawCell(row, col)
+  }
+
+  /**
+   * Handle mouse enter while dragging to draw
+   */
+  const handleMouseEnter = (row, col) => {
+    if (isDrawingRef.current) {
+      drawCell(row, col)
+    }
+  }
+
+  /**
+   * Handle mouse up to stop drawing
+   */
+  const handleMouseUp = () => {
+    isDrawingRef.current = false
+  }
+
+  /**
+   * Cleanup on unmount
+   */
+  useEffect(() => {
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => window.removeEventListener('mouseup', handleMouseUp)
+  }, [])
 
   /**
    * Convert grid to room layout JSON
@@ -189,6 +231,7 @@ function GridEditor({ onLayoutGenerated }) {
           style={{
             width: GRID_SIZE * CELL_SIZE,
             height: GRID_SIZE * CELL_SIZE,
+            userSelect: 'none',
           }}
         >
           {grid.map((row, rowIdx) =>
@@ -201,6 +244,8 @@ function GridEditor({ onLayoutGenerated }) {
                   height: CELL_SIZE,
                 }}
                 onClick={() => handleCellClick(rowIdx, colIdx)}
+                onMouseDown={() => handleMouseDown(rowIdx, colIdx)}
+                onMouseEnter={() => handleMouseEnter(rowIdx, colIdx)}
               />
             ))
           )}

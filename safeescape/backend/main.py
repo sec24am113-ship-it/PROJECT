@@ -240,9 +240,15 @@ async def websocket_simulate(websocket: WebSocket):
         
     except Exception as e:
         print(f"WebSocket error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
+        # Ensure connection is removed from active set
         active_connections.discard(websocket)
-        await websocket.close()
+        try:
+            await websocket.close()
+        except Exception as close_err:
+            print(f"Error closing websocket: {close_err}")
 
 
 async def _run_simulation_loop(websocket: WebSocket, runner: SimulationRunner):
@@ -256,7 +262,8 @@ async def _run_simulation_loop(websocket: WebSocket, runner: SimulationRunner):
     try:
         print(f"[SIM] Starting simulation loop")
         print(f"[SIM] Agents: {len(runner.agent_engine.agents)}")
-        print(f"[SIM] Exits reachable: {runner.agent_engine.agents}")
+        exits = [room_id for room_id, room_data in runner.graph.get_all_rooms().items() if room_data.get('is_exit')]
+        print(f"[SIM] Exits reachable: {exits}")
         
         frame_count = 0
         

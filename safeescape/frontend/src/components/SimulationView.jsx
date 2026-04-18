@@ -28,10 +28,13 @@ function SimulationView({ frameData, isRunning }) {
     if (!canvas || !frameData) return
 
     const ctx = canvas.getContext('2d')
+    // Reset transform before clearing
+    ctx.resetTransform()
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // Set scaling for better rendering
-    const scale = 2
+    // Scale context to improve rendering quality
+    // Note: canvas resolution is set in JSX (800x600), scale factor adjusts drawing
+    const scale = 1
     ctx.scale(scale, scale)
 
     // Draw rooms

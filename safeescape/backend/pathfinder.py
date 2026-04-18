@@ -81,9 +81,11 @@ class Pathfinder:
         g_score: Dict[str, float] = {start_room: 0}
         f_score: Dict[str, float] = {start_room: self.heuristic(start_room, exit_room)}
         closed_set = set()
+        open_set_dict = {start_room}  # Track what's in open_set for O(1) lookup
 
         while open_set:
             _, current = heapq.heappop(open_set)
+            open_set_dict.discard(current)
 
             if current == exit_room:
                 # Reconstruct path
@@ -109,8 +111,9 @@ class Pathfinder:
                     g_score[neighbor] = tentative_g
                     f_score[neighbor] = tentative_g + self.heuristic(neighbor, exit_room)
 
-                    # Add to open set if not already there
-                    if neighbor not in [item[1] for item in open_set]:
+                    # Add to open set if not already there (O(1) lookup)
+                    if neighbor not in open_set_dict:
+                        open_set_dict.add(neighbor)
                         heapq.heappush(open_set, (f_score[neighbor], neighbor))
 
         return None  # No path found
