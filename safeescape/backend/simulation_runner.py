@@ -29,6 +29,7 @@ class SimulationRunner:
         self.current_tick = 0
         self.simulation_running = False
         self.simulation_history: List[Dict[str, Any]] = []
+        self.max_history_frames = 500  # Cap history to prevent memory issues
         self.frame_callback: Optional[Callable] = None
 
     def setup_agents(self, agent_count: int, start_room: str) -> None:
@@ -70,6 +71,10 @@ class SimulationRunner:
         # Collect frame data
         frame_data = self._collect_frame_data()
         self.simulation_history.append(frame_data)
+
+        # Cap history to prevent memory issues
+        if len(self.simulation_history) > self.max_history_frames:
+            self.simulation_history = self.simulation_history[-self.max_history_frames:]
 
         self.current_tick += 1
 

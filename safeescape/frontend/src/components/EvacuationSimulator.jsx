@@ -1,26 +1,40 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import "./EvacuationSimulator.css";
 
-const COLS = 16, ROWS = 10, FLOORS = 3;
-const CELL = 36;
-const ISO_X = CELL, ISO_Y = CELL * 0.5;
-const FLOOR_OFFSET_Y = 140;
-const FLOOR_OFFSET_X = 20;
-const EMPTY="empty", WALL="wall", ROOM="room", EXIT="exit", STAIR="stair";
+const COLS = 100;
+const ROWS = 100;
+const CELL = 20;
 
-const TOOLS = [
-  { key:"room",   icon:"⬜", label:"Room",   desc:"Walkable floor" },
-  { key:"wall",   icon:"⬛", label:"Wall",   desc:"Solid barrier" },
-  { key:"exit",   icon:"🚪", label:"Exit",   desc:"Evacuation exit" },
-  { key:"stair",  icon:"🪜", label:"Stair",  desc:"Connect floors" },
-  { key:"person", icon:"🧍", label:"Person", desc:"Add occupant" },
-  { key:"erase",  icon:"✕",  label:"Erase",  desc:"Remove cell" },
-];
+const EMPTY = "empty";
+const WALL = "wall";
+const ROOM = "room";
+const EXIT = "exit";
+const FIRE = "fire";
+const PERSON = "person";
+const SAFE = "safe";
+const PATH = "path";
 
-function toIso(col, row, floor) {
-  const ox = 320 + FLOOR_OFFSET_X * (FLOORS - 1 - floor);
-  const oy = 80  + FLOOR_OFFSET_Y * (FLOORS - 1 - floor);
-  return { x: ox + (col - row) * (ISO_X/2), y: oy + (col + row) * (ISO_Y/2) };
-}
+const COLORS = {
+  empty: "#0a0e17",
+  wall: "#1a2233",
+  room: "#1e2d45",
+  exit: "#00ff88",
+  fire: "#ff4400",
+  person: "#60b8ff",
+  safe: "#0f3d2a",
+  path: "#ffd700",
+  fireBorder: "#ff6a00",
+  smoke: "#2a1a0a",
+};
+
+const TOOL_INFO = {
+  room: { label: "Room", icon: "⬜", desc: "Draw walkable rooms & corridors" },
+  wall: { label: "Wall", icon: "⬛", desc: "Block paths with walls" },
+  exit: { label: "Exit", icon: "🚪", desc: "Place evacuation exits" },
+  stairs: { label: "Stairs", icon: "🪜", desc: "Connect floors (up/down)" },
+  person: { label: "Person", icon: "🧍", desc: "Add people to evacuate" },
+  erase: { label: "Erase", icon: "✕", desc: "Erase cells" },
+};
 
 function makeGrids() {
   return Array.from({length:FLOORS}, () =>
@@ -113,51 +127,326 @@ function bfs3D(startF, startR, startC, grids, fireSet) {
   return path;
 }
 
-export default function EvacSim3D() {
-  const [grids, setGrids]       = useState(makeGrids);
-  const [tool,  setTool]        = useState("room");
-  const [activeFloor, setActiveFloor] = useState(0);
-  const [phase, setPhase]       = useState("build");
-  const [fireSet, setFireSet]   = useState(new Set());
-  const [persons, setPersons]   = useState([]);
-  const [paths,   setPaths]     = useState([]);
-  const [step,    setStep]      = useState(0);
-  const [running, setRunning]   = useState(false);
-  const [log,     setLog]       = useState([]);
-  const [hovered, setHovered]   = useState(null);
-  const [showBuilder, setShowBuilder] = useState(false);
-  const [bFloors,  setBFloors]  = useState("3");
-  const [bRooms,   setBRooms]   = useState("3,3,2");
-  const [bPeople,  setBPeople]  = useState("5,6,4");
-  const [bError,   setBError]   = useState("");
+export default function EvacuationSimulator() {
+  const generateId = useCallback(() => {
+    return `person_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }, []);
 
+  const [floors, setFloors] = useState([makeGrid()]); // Multi-floor support
+  const [currentFloor, setCurrentFloor] = useState(0);
+  const grid = floors[currentFloor];
+  const setGrid = useCallback((updater) => {
+    setFloors(prev => {
+      const newFloors = [...prev];
+      const currentGrid = newFloors[currentFloor];
+      newFloors[currentFloor] = 
+        typeof updater === "function" ? updater(currentGrid) : updater;
+      return newFloors;
+    });
+  }, [currentFloor]);
+  
+  const [tool, setTool] = useState("room");
+  const [phase, setPhase] = useState("build");
+  const [fireSet, setFireSet] = useState(new Set());
+  const fireSetRef = useRef(fireSet);
+  fireSetRef.current = fireSet;
+  const [persons, setPersons] = useState([]);
+  const [paths, setPaths] = useState([]);
+  const [step, setStep] = useState(0);
+  const [running, setRunning] = useState(false);
+  const [log, setLog] = useState([]);
+  const [fireOrigin, setFireOrigin] = useState(null);
+  const [hover, setHover] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const canvasRef = useRef(null);
   const intervalRef = useRef(null);
-  const personsRef  = useRef(persons);
-  const fireRef     = useRef(fireSet);
-  const gridsRef    = useRef(grids);
-  const draggingRef = useRef(false);
-  const toolRef     = useRef(tool);
-  const phaseRef    = useRef(phase);
-  personsRef.current = persons;
-  fireRef.current    = fireSet;
-  gridsRef.current   = grids;
-  toolRef.current    = tool;
-  phaseRef.current   = phase;
+  const pathCacheRef = useRef(new Map());
+  const dirtyRef = useRef(new Set());
+  const prevGridRef = useRef(null);
+  const drawnOnceRef = useRef(false);
 
-  const addLog = (msg, type="info") =>
-    setLog(p=>[{msg,type,id:Date.now()+Math.random()},...p].slice(0,10));
-  const cellKey = (f,r,c) => `${f},${r},${c}`;
+  const addLog = useCallback((msg, type = "info") => {
+    setLog((prev) =>
+      [{ msg, type, id: Date.now() + Math.random() }, ...prev].slice(0, 8)
+    );
+  }, []);
 
-  const handleAutoBuild = () => {
-    setBError("");
-    const nf = parseInt(bFloors);
-    if (isNaN(nf)||nf<1||nf>FLOORS) { setBError(`Floors: 1 to ${FLOORS}`); return; }
-    const rooms  = bRooms.split(",").map(s=>parseInt(s.trim()));
-    const people = bPeople.split(",").map(s=>parseInt(s.trim()));
-    if (rooms.length<nf||people.length<nf) { setBError(`Need ${nf} values for rooms and people.`); return; }
-    for (let i=0;i<nf;i++) {
-      if (isNaN(rooms[i])||rooms[i]<1||rooms[i]>6) { setBError(`Floor ${i+1}: rooms must be 1–6`); return; }
-      if (isNaN(people[i])||people[i]<0||people[i]>20) { setBError(`Floor ${i+1}: people must be 0–20`); return; }
+  // Clear path cache when fire changes
+  useEffect(() => {
+    pathCacheRef.current.clear();
+  }, [fireSet]);
+
+  // Memoized BFS path with caching
+  const getCachedPath = useCallback((r, c, floor) => {
+    const cacheKey = `${r},${c},${floor},${step}`;
+    if (pathCacheRef.current.has(cacheKey)) {
+      return pathCacheRef.current.get(cacheKey);
+    }
+    const path = bfsPath(r, c, floor, floors, fireSet);
+    pathCacheRef.current.set(cacheKey, path);
+    return path;
+  }, [floors, fireSet, step]);
+
+  const paintCell = useCallback(
+    (r, c) => {
+      setGrid((prev) => {
+        // Only update the specific row that changed
+        const newGrid = [...prev];
+        const newRow = [...prev[r]];
+        newRow[c] = tool === "erase" ? EMPTY : tool;
+        newGrid[r] = newRow;
+        dirtyRef.current.add(`${r},${c}`);
+        return newGrid;
+      });
+      if (tool === "person") {
+        setPersons((prev) => {
+          if (prev.some((p) => p.r === r && p.c === c && p.floor === currentFloor)) return prev;
+          return [
+            ...prev,
+            { r, c, floor: currentFloor, id: generateId(), reached: false, lost: false },
+          ];
+        });
+      }
+    },
+    [tool, currentFloor, generateId]
+  );
+
+  const handleCellInteract = (r, c) => {
+    if (phase !== "build") return;
+    paintCell(r, c);
+  };
+
+  // Define cellEmoji first (no dependencies)
+  const cellEmoji = (display) => {
+    if (display === EXIT) return "🚪";
+    if (display === PERSON) return "🧍";
+    if (display === "safe_person") return "✅";
+    if (display === "lost_person") return "💀";
+    if (display === FIRE) return step % 2 === 0 ? "🔥" : "🌋";
+    if (display === PATH) return "·";
+    if (display === "stairs") return "🪜";
+    return "";
+  };
+
+  // Define cellStyle (no hook dependencies)  
+  const cellStyle = (display, r, c, hover, phase, step) => {
+    const isHovered = hover && hover[0] === r && hover[1] === c && phase === "build";
+    let bg = COLORS[display] || COLORS.empty;
+    let border = "transparent";
+    let glow = "";
+    let opacity = 1;
+
+    if (display === FIRE) {
+      bg = `hsl(${15 + ((r * c * step) % 20)}, 100%, ${35 + ((step % 3) * 5)}%)`;
+      glow = `0 0 12px 3px rgba(255,80,0,0.6)`;
+      border = COLORS.fireBorder;
+    } else if (display === "safe_person") {
+      bg = "#00cc66";
+      glow = "0 0 8px 2px rgba(0,200,100,0.5)";
+    } else if (display === "lost_person") {
+      bg = "#880000";
+      glow = "0 0 8px 2px rgba(200,0,0,0.5)";
+    } else if (display === PERSON) {
+      glow = "0 0 10px 2px rgba(96,184,255,0.6)";
+    } else if (display === EXIT) {
+      glow = "0 0 10px 3px rgba(0,255,136,0.5)";
+    } else if (display === PATH) {
+      bg = "#1a1600";
+      border = "#ffd700";
+      glow = "0 0 6px 1px rgba(255,215,0,0.3)";
+    } else if (display === "stairs") {
+      bg = "#6600cc";
+      glow = "0 0 8px 2px rgba(102,0,204,0.5)";
+      border = "#9933ff";
+    }
+
+    if (isHovered) {
+      glow = "0 0 0 2px #ffffff44 inset";
+      opacity = 0.8;
+    }
+
+    return {
+      width: CELL,
+      height: CELL,
+      backgroundColor: bg,
+      border: `1px solid ${border === "transparent" ? (display === EMPTY ? "#0f1520" : "#1e3050") : border}`,
+      boxShadow: glow,
+      opacity,
+      cursor: phase === "build" ? "crosshair" : "default",
+      transition: "background-color 0.3s, box-shadow 0.3s",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: 18,
+      userSelect: "none",
+      position: "relative",
+    };
+  };
+
+  // Define getDisplay (useCallback, depends on grid/fireSet/persons/paths/phase/currentFloor)
+  const getDisplay = useCallback((r, c) => {
+    const cell = grid[r][c];
+    
+    if (phase === "simulate") {
+      if (fireSet.has(`${r},${c},${currentFloor}`)) return FIRE;
+      
+      const personHere = persons.find(
+        p => p.r === r && p.c === c && p.floor === currentFloor
+      );
+      if (personHere) {
+        if (personHere.reached) return "safe_person";
+        if (personHere.lost) return "lost_person";
+        return PERSON;
+      }
+      
+      if (paths.some(p => p[0] === r && p[1] === c && p[2] === currentFloor) && cell === ROOM) {
+        return PATH;
+      }
+    }
+    return cell;
+  }, [grid, fireSet, persons, paths, phase, currentFloor]);
+
+  // Optimize cell style calculation with useMemo
+  const memoizedCellStyle = useCallback((display, r, c) => {
+    return cellStyle(display, r, c);
+  }, [hover, phase, step, currentFloor]);
+
+  // NOW define drawCell (useCallback, depends on getDisplay, cellStyle, cellEmoji)
+  const drawCell = useCallback((ctx, r, c) => {
+    const display = getDisplay(r, c);
+    const style = cellStyle(display, r, c, hover, phase, step);
+    
+    // Paint solid background - overwrites previous content
+    ctx.fillStyle = style.backgroundColor;
+    ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
+
+    // Border
+    if (style.border !== 'transparent') {
+      ctx.strokeStyle = style.border;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(c * CELL, r * CELL, CELL, CELL);
+    }
+
+    // Emoji if needed
+    const emoji = cellEmoji(display);
+    if (emoji) {
+      ctx.font = `${style.fontSize}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(emoji, c * CELL + CELL / 2, r * CELL + CELL / 2);
+    }
+  }, [getDisplay, cellStyle, cellEmoji, hover, phase, step]);
+
+  // Canvas rendering for performance - separate from event binding
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const drawGrid = () => {
+      if (!drawnOnceRef.current || phase === 'simulate') {
+        // Full redraw on first render OR any simulation tick
+        canvas.width = COLS * CELL;
+        canvas.height = ROWS * CELL;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        for (let r = 0; r < ROWS; r++) {
+          for (let c = 0; c < COLS; c++) {
+            drawCell(ctx, r, c);
+          }
+        }
+        drawnOnceRef.current = true;
+        dirtyRef.current.clear();
+      } else {
+        // Build mode only: repaint dirty cells
+        for (const key of dirtyRef.current) {
+          const [r, c] = key.split(',').map(Number);
+          drawCell(ctx, r, c);
+        }
+        dirtyRef.current.clear();
+      }
+    };
+
+    drawGrid();
+  }, [grid, step, fireSet, persons, paths, phase, currentFloor, hover, drawCell]);
+
+  // Event binding - separate from drawing to avoid re-registering on every render
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleMouseDown = (e) => {
+      setDragging(true);
+      handleCanvasInteract(e);
+    };
+
+    const handleMouseMove = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (e.clientX - rect.left) * scaleX;
+      const y = (e.clientY - rect.top) * scaleY;
+      const c = Math.floor(x / CELL);
+      const r = Math.floor(y / CELL);
+      
+      if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+        setHover([r, c]);
+        if (dragging) {
+          handleCanvasInteract(e);
+        }
+      }
+    };
+
+    const handleMouseUp = () => {
+      setDragging(false);
+    };
+
+    const handleCanvasInteract = (e) => {
+      if (phase !== "build") return;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (e.clientX - rect.left) * scaleX;
+      const y = (e.clientY - rect.top) * scaleY;
+      const c = Math.floor(x / CELL);
+      const r = Math.floor(y / CELL);
+      
+      if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+        handleCellInteract(r, c);
+      }
+    };
+
+    // Add listeners
+    canvas.addEventListener('mousedown', handleMouseDown);
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    // Cleanup function - IMPORTANT!
+    return () => {
+      canvas.removeEventListener('mousedown', handleMouseDown);
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [phase, tool, zoom]);
+
+  const startSim = () => {
+    const exits = [];
+    const rooms = [];
+    
+    // Scan all floors
+    for (let floor = 0; floor < floors.length; floor++) {
+      const floorGrid = floors[floor];
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          if (floorGrid[r][c] === EXIT) exits.push([r, c, floor]);
+          if (floorGrid[r][c] === ROOM || floorGrid[r][c] === EXIT || floorGrid[r][c] === "stairs") 
+            rooms.push([r, c, floor]);
+        }
+      }
     }
     const spec = { floors: Array.from({length:nf},(_,i)=>({rooms:rooms[i],people:people[i]})) };
     const {grids:newG, persons:newP} = buildFromSpec(spec);
@@ -204,8 +493,17 @@ export default function EvacSim3D() {
 
   const reset = () => {
     clearInterval(intervalRef.current);
-    setPhase("build"); setFireSet(new Set()); setPersons([]);
-    setPaths([]); setStep(0); setRunning(false); setLog([]);
+    setPhase("build");
+    setFireSet(new Set());
+    setPersons([]);
+    setPaths([]);
+    setStep(0);
+    setRunning(false);
+    setFireOrigin(null);
+    setLog([]);
+    // Clear dirty cell tracking to force full redraw
+    dirtyRef.current.clear();
+    drawnOnceRef.current = false;
   };
   const clearAll = () => { reset(); setGrids(makeGrids()); };
 
@@ -228,21 +526,28 @@ export default function EvacSim3D() {
         }
         return next;
       });
-      setPersons(prev=>{
-        const g=gridsRef.current,fire=fireRef.current;
-        return prev.map(p=>{
-          if (p.reached||p.lost) return p;
-          if (fire.has(cellKey(p.f,p.r,p.c))) return {...p,lost:true};
-          const path=bfs3D(p.f,p.r,p.c,g,fire);
-          if (!path||path.length<2) return {...p,lost:true};
-          const [nf,nr,nc]=path[1];
-          return {...p,f:nf,r:nr,c:nc,reached:g[nf][nr][nc]===EXIT};
+
+      // Move persons and compute display paths in single update
+      setPersons((prev) => {
+        const updatedPersons = prev.map((p) => {
+          if (p.reached || p.lost) return p;
+          const path = getCachedPath(p.r, p.c, p.floor);
+          if (!path || path.length < 2) {
+            return { ...p, lost: true };
+          }
+          const [nr, nc, nf] = path[1];
+          const reachedExit = floors[nf][nr][nc] === EXIT;
+          return { ...p, r: nr, c: nc, floor: nf, reached: reachedExit };
         });
-      });
-      setPersons(prev=>{
-        const g=gridsRef.current,fire=fireRef.current;
-        setPaths(prev.filter(p=>!p.reached&&!p.lost).map(p=>bfs3D(p.f,p.r,p.c,g,fire)).filter(Boolean));
-        return prev;
+
+        // Compute display paths from updated persons (only for current floor)
+        const newPaths = updatedPersons
+          .filter((p) => !p.reached && !p.lost && p.floor === currentFloor)
+          .map((p) => getCachedPath(p.r, p.c, p.floor))
+          .filter(Boolean);
+        setPaths(newPaths);
+
+        return updatedPersons;
       });
     },800);
     return ()=>clearInterval(intervalRef.current);
@@ -255,84 +560,11 @@ export default function EvacSim3D() {
       const s=persons.filter(p=>p.reached).length,l=persons.filter(p=>p.lost).length;
       addLog(`Done · ✅${s} safe  ❌${l} lost`,s===persons.length?"safe":"warn");
     }
-  },[persons,phase]);
+  }, [persons, phase]);
 
-  const getCellDisplay=(f,r,c)=>{
-    const base=grids[f][r][c];
-    if (phase==="simulate") {
-      const k=cellKey(f,r,c);
-      if (fireSet.has(k)) return "fire";
-      const p=persons.find(p=>p.f===f&&p.r===r&&p.c===c);
-      if (p) return p.reached?"safe_p":p.lost?"lost_p":"person";
-      if (paths.some(path=>path.some(([pf,pr,pc])=>pf===f&&pr===r&&pc===c))&&base===ROOM) return "path";
-    }
-    if (base===EMPTY&&persons.find(p=>p.f===f&&p.r===r&&p.c===c)&&phase==="build") return "person";
-    return base;
-  };
-
-  const cFill={empty:"transparent",wall:"#1a2a3a",room:"#1e3550",exit:"#00cc66",stair:"#8855ff",person:"#60b8ff",fire:"#ff4400",path:"#ffd70033",safe_p:"#00ff88",lost_p:"#880000"};
-  const cEmoji={exit:"🚪",stair:"🪜",person:"🧍",safe_p:"✅",lost_p:"💀"};
-
-  function isoCell(f,r,c,display) {
-    if (display==="empty") return null;
-    const {x,y}=toIso(c,r,f);
-    const hw=ISO_X/2,hh=ISO_Y/2;
-    const wallH=display==="wall"?28:display==="stair"?18:12;
-    const fill=cFill[display]||"#1e3550";
-    const isFire=display==="fire";
-    const topPts=[`${x},${y-hh}`,`${x+hw},${y}`,`${x},${y+hh}`,`${x-hw},${y}`].join(" ");
-    const leftPts=[`${x-hw},${y}`,`${x},${y+hh}`,`${x},${y+hh+wallH}`,`${x-hw},${y+wallH}`].join(" ");
-    const rightPts=[`${x+hw},${y}`,`${x},${y+hh}`,`${x},${y+hh+wallH}`,`${x+hw},${y+wallH}`].join(" ");
-    const lc=isFire?"#cc2200":display==="wall"?"#1a2030":"#162840";
-    const rc=isFire?"#ff3300":display==="wall"?"#1e2840":"#1a3048";
-    const isHov=hovered===`${f},${r},${c}`;
-    return (
-      <g key={`${f}-${r}-${c}`} style={{cursor:phase==="build"?"crosshair":"default"}}
-        onMouseDown={()=>{draggingRef.current=true;paintCell(f,r,c);}}
-        onMouseEnter={()=>{setHovered(`${f},${r},${c}`);if(draggingRef.current)paintCell(f,r,c);}}
-        onMouseUp={()=>{draggingRef.current=false;}}>
-        {display!=="empty"&&<polygon points={leftPts} fill={lc} stroke="#0a1520" strokeWidth="0.5"/>}
-        {display!=="empty"&&<polygon points={rightPts} fill={rc} stroke="#0a1520" strokeWidth="0.5"/>}
-        <polygon points={topPts} fill={isHov&&phase==="build"?"#ffffff22":fill} stroke="#0a1520" strokeWidth="0.5" opacity={isFire?0.9:1}/>
-        {cEmoji[display]&&<text x={x} y={y-hh+2} textAnchor="middle" fontSize="11" style={{userSelect:"none",pointerEvents:"none"}}>{cEmoji[display]}</text>}
-        {display==="stair"&&[1,2,3].map(i=><line key={i} x1={x-hw*0.6+i*(hw*0.4)} y1={y-hh+i*3} x2={x+hw*0.1+i*(hw*0.2)} y2={y+i*3} stroke="#aa77ff" strokeWidth="1.5" opacity="0.6"/>)}
-        {display==="path"&&<circle cx={x} cy={y} r="3" fill="#ffd700" opacity="0.7"/>}
-        {isFire&&<ellipse cx={x} cy={y-hh-2} rx="6" ry="4" fill="#ff8800" opacity="0.5"><animate attributeName="ry" values="4;6;4" dur="0.6s" repeatCount="indefinite"/></ellipse>}
-      </g>
-    );
-  }
-
-  const svgW=820,svgH=620;
-  const cellElements=[];
-  for (let f=FLOORS-1;f>=0;f--) {
-    const lp=toIso(0,0,f);
-    cellElements.push(<text key={`fl-${f}`} x={lp.x-ISO_X/2-10} y={lp.y} fill={activeFloor===f?"#60b8ff":"#3a5a7a"} fontSize="11" fontFamily="'Courier New',monospace" textAnchor="end" style={{userSelect:"none"}}>FL {f+1}</text>);
-    const corners=[toIso(0,0,f),toIso(COLS-1,0,f),toIso(COLS-1,ROWS-1,f),toIso(0,ROWS-1,f)];
-    cellElements.push(
-      <polygon key={`base-${f}`} points={corners.map(p=>`${p.x},${p.y}`).join(" ")} fill={f===activeFloor?"#0a1828":"#070e18"} stroke={f===activeFloor?"#2a5a8a":"#0f2035"} strokeWidth={f===activeFloor?1.5:0.5} onClick={()=>setActiveFloor(f)} style={{cursor:"pointer"}}/>
-    );
-    for (let r=0;r<ROWS;r++) for (let c=0;c<COLS;c++) {
-      const display=getCellDisplay(f,r,c);
-      if (display==="empty"&&f===activeFloor&&phase==="build") {
-        const {x,y}=toIso(c,r,f);
-        const hw=ISO_X/2,hh=ISO_Y/2;
-        const pts=[`${x},${y-hh}`,`${x+hw},${y}`,`${x},${y+hh}`,`${x-hw},${y}`].join(" ");
-        cellElements.push(
-          <polygon key={`hit-${f}-${r}-${c}`} points={pts} fill="transparent" stroke="transparent" style={{cursor:"crosshair"}}
-            onMouseDown={()=>{draggingRef.current=true;paintCell(f,r,c);}}
-            onMouseEnter={()=>{setHovered(`${f},${r},${c}`);if(draggingRef.current)paintCell(f,r,c);}}
-            onMouseUp={()=>{draggingRef.current=false;}}
-          />
-        );
-      } else if (display!=="empty") {
-        cellElements.push(isoCell(f,r,c,display));
-      }
-    }
-  }
-
-  const safe=persons.filter(p=>p.reached).length;
-  const lost=persons.filter(p=>p.lost).length;
-  const danger=persons.filter(p=>!p.reached&&!p.lost).length;
+  const safe = persons.filter((p) => p.reached).length;
+  const lost = persons.filter((p) => p.lost).length;
+  const inDanger = persons.filter((p) => !p.reached && !p.lost).length;
 
   return (
     <div style={{minHeight:"100vh",background:"#040810",fontFamily:"'Courier New',monospace",color:"#a0c8e8",display:"flex",flexDirection:"column"}}>
@@ -425,9 +657,34 @@ export default function EvacSim3D() {
                 click floor plate to switch active floor
               </text>
             )}
-          </svg>
-          <div style={{fontSize:9,color:"#1a3a5a",letterSpacing:2,marginTop:8}}>
-            ISO 3D · {COLS}×{ROWS}×{FLOORS} · BACK-TO-FRONT RENDERING
+            <div className="zoom-controls">
+              <button onClick={() => setZoom(z => Math.min(z + 0.1, 3))} className="zoom-btn">+</button>
+              <span className="zoom-level">{Math.round(zoom * 100)}%</span>
+              <button onClick={() => setZoom(z => Math.max(z - 0.1, 0.3))} className="zoom-btn">-</button>
+            </div>
+            <div
+              className="grid-wrapper"
+              onMouseLeave={() => setDragging(false)}
+              onWheel={(e) => {
+                e.preventDefault();
+                setZoom(z => Math.max(0.3, Math.min(3, z - e.deltaY * 0.001)));
+              }}
+              style={{
+                transform: `scale(${zoom})`,
+                transformOrigin: 'center',
+                transition: 'transform 0.1s ease-out'
+              }}
+            >
+              <canvas
+                ref={canvasRef}
+                style={{
+                  cursor: phase === "build" ? "crosshair" : "default"
+                }}
+              />
+            </div>
+            <div className="grid-stats">
+              {COLS}×{ROWS} GRID · {persons.length} PERSON(S) · {[...fireSet].length} FIRE CELL(S)
+            </div>
           </div>
         </div>
       </div>

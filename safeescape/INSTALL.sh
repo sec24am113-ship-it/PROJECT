@@ -12,11 +12,22 @@ cd "$(dirname "$0")"
 
 echo "[1/2] Installing Backend Dependencies..."
 cd backend
+
+# Create virtual environment if it doesn't exist
+if [ ! -d "venv" ]; then
+    echo "Creating virtual environment..."
+    python3 -m venv venv
+fi
+
+# Activate virtual environment and install dependencies
+. venv/bin/activate
+pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 if [ $? -ne 0 ]; then
     echo "ERROR: Backend installation failed"
     exit 1
 fi
+deactivate
 
 echo "[2/2] Installing Frontend Dependencies..."
 cd ../frontend
@@ -35,6 +46,7 @@ echo "Next steps:"
 echo ""
 echo "Terminal 1 - Run Backend:"
 echo "  cd backend"
+echo "  . venv/bin/activate"
 echo "  uvicorn main:app --reload --port 8000"
 echo ""
 echo "Terminal 2 - Run Frontend:"

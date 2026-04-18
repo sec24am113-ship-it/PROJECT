@@ -27,6 +27,7 @@ class Agent:
         self.evacuated = False
         self.stuck_counter = 0
         self.target_exit = None
+        self.path_initialized = False
 
     def initialize_path(self) -> bool:
         """
@@ -54,11 +55,12 @@ class Agent:
         if self.evacuated:
             return True
 
-        # Initialize path if not already done
-        if self.current_path is None:
+        # Initialize path on first tick for accurate fire information
+        if not self.path_initialized:
             if not self.initialize_path():
                 self.stuck_counter += 1
                 return False
+            self.path_initialized = True
 
         # Check if we're at the exit
         graph = self.pathfinder.graph
@@ -136,7 +138,7 @@ class AgentEngine:
         """
         agent = Agent(agent_id, start_room, self.pathfinder)
         self.agents[agent_id] = agent
-        agent.initialize_path()
+        # Defer path initialization to first tick for accurate fire information
         return agent
 
     def tick(self) -> None:
