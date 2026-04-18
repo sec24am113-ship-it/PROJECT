@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import "./EvacuationSimulator.css";
 
-const COLS = 20;
-const ROWS = 14;
-const CELL = 42;
+const COLS = 100;
+const ROWS = 100;
+const CELL = 20;
 
 const EMPTY = "empty";
 const WALL = "wall";
@@ -120,14 +120,22 @@ function bfsPath(startR, startC, startFloor, floors, fireSet) {
 }
 
 export default function EvacuationSimulator() {
+  const generateId = useCallback(() => {
+    return `person_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }, []);
+
   const [floors, setFloors] = useState([makeGrid()]); // Multi-floor support
   const [currentFloor, setCurrentFloor] = useState(0);
   const grid = floors[currentFloor];
-  const setGrid = (updater) => {
-    const newFloors = [...floors];
-    newFloors[currentFloor] = typeof updater === "function" ? updater(grid) : updater;
-    setFloors(newFloors);
-  };
+  const setGrid = useCallback((updater) => {
+    setFloors(prev => {
+      const newFloors = [...prev];
+      const currentGrid = newFloors[currentFloor];
+      newFloors[currentFloor] = 
+        typeof updater === "function" ? updater(currentGrid) : updater;
+      return newFloors;
+    });
+  }, [currentFloor]);
   
   const [tool, setTool] = useState("room");
   const [phase, setPhase] = useState("build");
@@ -140,6 +148,8 @@ export default function EvacuationSimulator() {
   const [fireOrigin, setFireOrigin] = useState(null);
   const [hover, setHover] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const canvasRef = useRef(null);
   const intervalRef = useRef(null);
 
   const addLog = useCallback((msg, type = "info") => {
@@ -151,32 +161,133 @@ export default function EvacuationSimulator() {
   const paintCell = useCallback(
     (r, c) => {
       setGrid((prev) => {
-        const g = prev.map((row) => [...row]);
-        if (tool === "erase") {
-          g[r][c] = EMPTY;
-          return g;
-        }
-        if (tool === "person") return prev;
-        g[r][c] = tool;
-        return g;
+        // Only update the specific row that changed
+        const newGrid = [...prev];
+        const newRow = [...prev[r]];
+        newRow[c] = tool === "erase" ? EMPTY : tool;
+        newGrid[r] = newRow;
+        return newGrid;
       });
       if (tool === "person") {
         setPersons((prev) => {
           if (prev.some((p) => p.r === r && p.c === c && p.floor === currentFloor)) return prev;
           return [
             ...prev,
-            { r, c, floor: currentFloor, id: Date.now() + Math.random(), reached: false, lost: false },
+            { r, c, floor: currentFloor, id: generateId(), reached: false, lost: false },
           ];
         });
       }
     },
-    [tool, currentFloor]
+    [tool, currentFloor, generateId]
   );
 
   const handleCellInteract = (r, c) => {
     if (phase !== "build") return;
     paintCell(r, c);
   };
+
+  // Optimize cell style calculation with useMemo
+  const memoizedCellStyle = useCallback((display, r, c) => {
+    return cellStyle(display, r, c);
+  }, [hover, phase, step, currentFloor]);
+
+  // Canvas rendering for performance
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width = COLS * CELL;
+    canvas.height = ROWS * CELL;
+
+    // Drawing function
+    const drawGrid = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const display = getDisplay(r, c);
+          const style = cellStyle(display, r, c);
+          
+          ctx.fillStyle = style.backgroundColor;
+          ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
+          
+          if (style.border !== 'transparent') {
+            ctx.strokeStyle = style.border;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(c * CELL, r * CELL, CELL, CELL);
+          }
+
+          const emoji = cellEmoji(display);
+          if (emoji) {
+            ctx.font = `${style.fontSize}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(emoji, c * CELL + CELL / 2, r * CELL + CELL / 2);
+          }
+        }
+      }
+    };
+
+    drawGrid();
+
+    // Event handlers with proper references
+    const handleMouseDown = (e) => {
+      setDragging(true);
+      handleCanvasInteract(e);
+    };
+
+    const handleMouseMove = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (e.clientX - rect.left) * scaleX;
+      const y = (e.clientY - rect.top) * scaleY;
+      const c = Math.floor(x / CELL);
+      const r = Math.floor(y / CELL);
+      
+      if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+        setHover([r, c]);
+        if (dragging) {
+          handleCanvasInteract(e);
+        }
+      }
+    };
+
+    const handleMouseUp = () => {
+      setDragging(false);
+    };
+
+    const handleCanvasInteract = (e) => {
+      if (phase !== "build") return;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (e.clientX - rect.left) * scaleX;
+      const y = (e.clientY - rect.top) * scaleY;
+      const c = Math.floor(x / CELL);
+      const r = Math.floor(y / CELL);
+      
+      if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+        handleCellInteract(r, c);
+      }
+    };
+
+    // Add listeners
+    canvas.addEventListener('mousedown', handleMouseDown);
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    // Cleanup function - IMPORTANT!
+    return () => {
+      canvas.removeEventListener('mousedown', handleMouseDown);
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [grid, step, fireSet, persons, paths, phase, tool, currentFloor, zoom, dragging, hover]);
 
   const startSim = () => {
     const exits = [];
@@ -308,28 +419,29 @@ export default function EvacuationSimulator() {
     }
   }, [persons, phase]);
 
-  const getDisplay = (r, c) => {
+  const getDisplay = useCallback((r, c) => {
+    const cell = grid[r][c];
+    
     if (phase === "simulate") {
       if (fireSet.has(`${r},${c},${currentFloor}`)) return FIRE;
-      const person = persons.find((p) => p.r === r && p.c === c && p.floor === currentFloor);
-      if (person)
-        return person.reached
-          ? "safe_person"
-          : person.lost
-            ? "lost_person"
-            : PERSON;
-      if (
-        paths.some(
-          (path) => path.some(([pr, pc, pf]) => pr === r && pc === c && pf === currentFloor)
-        ) &&
-        grid[r][c] === ROOM
-      )
+      
+      const personHere = persons.find(
+        p => p.r === r && p.c === c && p.floor === currentFloor
+      );
+      if (personHere) {
+        if (personHere.reached) return "safe_person";
+        if (personHere.lost) return "lost_person";
+        return PERSON;
+      }
+      
+      if (paths.some(p => p[0] === r && p[1] === c && p[2] === currentFloor) && cell === ROOM) {
         return PATH;
+      }
     }
-    return grid[r][c];
-  };
+    return cell;
+  }, [grid, fireSet, persons, paths, phase, currentFloor]);
 
-  const cellStyle = (display, r, c) => {
+  const cellStyle = useCallback((display, r, c) => {
     const isHovered = hover && hover[0] === r && hover[1] === c && phase === "build";
     let bg = COLORS[display] || COLORS.empty;
     let border = "transparent";
@@ -381,7 +493,7 @@ export default function EvacuationSimulator() {
       userSelect: "none",
       position: "relative",
     };
-  };
+  }, [hover, phase, step]);
 
   const cellEmoji = (display) => {
     if (display === EXIT) return "🚪";
@@ -542,34 +654,30 @@ export default function EvacuationSimulator() {
                 CLICK & DRAG TO PAINT · TOOL: {TOOL_INFO[tool]?.label.toUpperCase() || "ERASE"}
               </div>
             )}
+            <div className="zoom-controls">
+              <button onClick={() => setZoom(z => Math.min(z + 0.1, 3))} className="zoom-btn">+</button>
+              <span className="zoom-level">{Math.round(zoom * 100)}%</span>
+              <button onClick={() => setZoom(z => Math.max(z - 0.1, 0.3))} className="zoom-btn">-</button>
+            </div>
             <div
               className="grid-wrapper"
               onMouseLeave={() => setDragging(false)}
+              onWheel={(e) => {
+                e.preventDefault();
+                setZoom(z => Math.max(0.3, Math.min(3, z - e.deltaY * 0.001)));
+              }}
+              style={{
+                transform: `scale(${zoom})`,
+                transformOrigin: 'center',
+                transition: 'transform 0.1s ease-out'
+              }}
             >
-              {Array.from({ length: ROWS }, (_, r) => (
-                <div key={r} className="grid-row">
-                  {Array.from({ length: COLS }, (_, c) => {
-                    const display = getDisplay(r, c);
-                    return (
-                      <div
-                        key={c}
-                        style={cellStyle(display, r, c)}
-                        onMouseDown={() => {
-                          setDragging(true);
-                          handleCellInteract(r, c);
-                        }}
-                        onMouseEnter={() => {
-                          setHover([r, c]);
-                          if (dragging) handleCellInteract(r, c);
-                        }}
-                        onMouseUp={() => setDragging(false)}
-                      >
-                        {cellEmoji(display)}
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
+              <canvas
+                ref={canvasRef}
+                style={{
+                  cursor: phase === "build" ? "crosshair" : "default"
+                }}
+              />
             </div>
             <div className="grid-stats">
               {COLS}×{ROWS} GRID · {persons.length} PERSON(S) · {[...fireSet].length} FIRE CELL(S)
