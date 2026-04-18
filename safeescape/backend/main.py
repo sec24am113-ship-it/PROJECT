@@ -283,7 +283,7 @@ async def _run_simulation_loop(websocket: WebSocket, runner: SimulationRunner):
         summary = runner.get_simulation_summary()
         
         # Generate AI advisor report
-        advisor_report = GeminiAdvisor.generate_report({
+        advisor_report = await GeminiAdvisor.generate_report({
             "total_ticks": summary["total_ticks"],
             "stats": runner.agent_engine.get_evacuation_stats(),
         })

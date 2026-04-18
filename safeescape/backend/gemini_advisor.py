@@ -3,6 +3,7 @@ Gemini Advisor: Generates post-simulation evacuation reports using Hugging Face 
 Uses free Mistral-7B model for evacuation analysis and recommendations.
 """
 
+import asyncio
 import requests
 import json
 from typing import Dict, Any
@@ -15,7 +16,7 @@ class GeminiAdvisor:
     HF_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
 
     @staticmethod
-    def generate_report(simulation_data: Dict[str, Any]) -> str:
+    async def generate_report(simulation_data: Dict[str, Any]) -> str:
         """
         Generate an evacuation report based on simulation results.
         Uses Hugging Face free API with Mistral model.
@@ -36,31 +37,35 @@ class GeminiAdvisor:
             # Build prompt
             prompt = GeminiAdvisor._build_prompt(simulation_data)
 
-            # Call Hugging Face API
-            headers = {"Content-Type": "application/json"}
-            payload = {
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 500,
-                    "temperature": 0.7,
-                    "top_p": 0.95,
-                },
-            }
+            # Call Hugging Face API in thread pool to avoid blocking event loop
+            def call_api():
+                headers = {"Content-Type": "application/json"}
+                payload = {
+                    "inputs": prompt,
+                    "parameters": {
+                        "max_new_tokens": 500,
+                        "temperature": 0.7,
+                        "top_p": 0.95,
+                    },
+                }
 
-            response = requests.post(
-                GeminiAdvisor.HF_API_URL,
-                headers=headers,
-                json=payload,
-                timeout=30,
-            )
+                response = requests.post(
+                    GeminiAdvisor.HF_API_URL,
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                )
 
-            if response.status_code == 200:
-                result = response.json()
-                if isinstance(result, list) and len(result) > 0:
-                    return result[0].get("generated_text", "Report generation failed.")
-                return "Report generation failed."
-            else:
-                return f"API Error: {response.status_code} - {response.text}"
+                if response.status_code == 200:
+                    result = response.json()
+                    if isinstance(result, list) and len(result) > 0:
+                        return result[0].get("generated_text", "Report generation failed.")
+                    return "Report generation failed."
+                else:
+                    return f"API Error: {response.status_code} - {response.text}"
+
+            result = await asyncio.to_thread(call_api)
+            return result
 
         except Exception as e:
             return f"Error generating report: {str(e)}"

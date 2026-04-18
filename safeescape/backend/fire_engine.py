@@ -78,7 +78,7 @@ class FireEngine:
         self.fire_rooms.update(new_fires)
         self.heat_map = new_heat
 
-        # Update graph states and block corridors based on heat
+        # Update graph states and block/unblock corridors based on heat
         for room_id, heat in self.heat_map.items():
             if heat > 0.7:
                 state = "blocked"
@@ -93,6 +93,10 @@ class FireEngine:
             if heat > 0.7:
                 for adjacent in self.graph.get_adjacent_rooms(room_id):
                     self.graph.block_corridor(room_id, adjacent)
+            # Unblock corridors when heat dissipates
+            elif heat <= 0.7:
+                for adjacent in self.graph.get_adjacent_rooms(room_id):
+                    self.graph.unblock_corridor(room_id, adjacent)
 
     def get_heat_map(self) -> Dict[str, float]:
         """Get current heat levels in all rooms."""

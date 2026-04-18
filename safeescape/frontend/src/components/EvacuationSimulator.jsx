@@ -140,6 +140,8 @@ export default function EvacuationSimulator() {
   const [tool, setTool] = useState("room");
   const [phase, setPhase] = useState("build");
   const [fireSet, setFireSet] = useState(new Set());
+  const fireSetRef = useRef(fireSet);
+  fireSetRef.current = fireSet;
   const [persons, setPersons] = useState([]);
   const [paths, setPaths] = useState([]);
   const [step, setStep] = useState(0);
@@ -151,12 +153,32 @@ export default function EvacuationSimulator() {
   const [zoom, setZoom] = useState(1);
   const canvasRef = useRef(null);
   const intervalRef = useRef(null);
+  const pathCacheRef = useRef(new Map());
+  const dirtyRef = useRef(new Set());
+  const prevGridRef = useRef(null);
+  const drawnOnceRef = useRef(false);
 
   const addLog = useCallback((msg, type = "info") => {
     setLog((prev) =>
       [{ msg, type, id: Date.now() + Math.random() }, ...prev].slice(0, 8)
     );
   }, []);
+
+  // Clear path cache when fire changes
+  useEffect(() => {
+    pathCacheRef.current.clear();
+  }, [fireSet]);
+
+  // Memoized BFS path with caching
+  const getCachedPath = useCallback((r, c, floor) => {
+    const cacheKey = `${r},${c},${floor},${step}`;
+    if (pathCacheRef.current.has(cacheKey)) {
+      return pathCacheRef.current.get(cacheKey);
+    }
+    const path = bfsPath(r, c, floor, floors, fireSet);
+    pathCacheRef.current.set(cacheKey, path);
+    return path;
+  }, [floors, fireSet, step]);
 
   const paintCell = useCallback(
     (r, c) => {
@@ -166,6 +188,7 @@ export default function EvacuationSimulator() {
         const newRow = [...prev[r]];
         newRow[c] = tool === "erase" ? EMPTY : tool;
         newGrid[r] = newRow;
+        dirtyRef.current.add(`${r},${c}`);
         return newGrid;
       });
       if (tool === "person") {
@@ -191,7 +214,33 @@ export default function EvacuationSimulator() {
     return cellStyle(display, r, c);
   }, [hover, phase, step, currentFloor]);
 
-  // Canvas rendering for performance
+  // Draw individual cell - no clearRect needed since solid rectangles overwrite
+  const drawCell = useCallback((ctx, r, c) => {
+    const display = getDisplay(r, c);
+    const style = cellStyle(display, r, c, hover, phase, step);
+    
+    // Paint solid background - overwrites previous content
+    ctx.fillStyle = style.backgroundColor;
+    ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
+
+    // Border
+    if (style.border !== 'transparent') {
+      ctx.strokeStyle = style.border;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(c * CELL, r * CELL, CELL, CELL);
+    }
+
+    // Emoji if needed
+    const emoji = cellEmoji(display);
+    if (emoji) {
+      ctx.font = `${style.fontSize}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(emoji, c * CELL + CELL / 2, r * CELL + CELL / 2);
+    }
+  }, [getDisplay, cellStyle, cellEmoji, hover, phase, step]);
+
+  // Canvas rendering for performance - separate from event binding
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -199,40 +248,35 @@ export default function EvacuationSimulator() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    canvas.width = COLS * CELL;
-    canvas.height = ROWS * CELL;
-
-    // Drawing function
     const drawGrid = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      for (let r = 0; r < ROWS; r++) {
-        for (let c = 0; c < COLS; c++) {
-          const display = getDisplay(r, c);
-          const style = cellStyle(display, r, c);
-          
-          ctx.fillStyle = style.backgroundColor;
-          ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
-          
-          if (style.border !== 'transparent') {
-            ctx.strokeStyle = style.border;
-            ctx.lineWidth = 1;
-            ctx.strokeRect(c * CELL, r * CELL, CELL, CELL);
-          }
-
-          const emoji = cellEmoji(display);
-          if (emoji) {
-            ctx.font = `${style.fontSize}px Arial`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(emoji, c * CELL + CELL / 2, r * CELL + CELL / 2);
+      if (!drawnOnceRef.current) {
+        // First render: draw all cells, no clearRect
+        canvas.width = COLS * CELL;
+        canvas.height = ROWS * CELL;
+        for (let r = 0; r < ROWS; r++) {
+          for (let c = 0; c < COLS; c++) {
+            drawCell(ctx, r, c);
           }
         }
+        drawnOnceRef.current = true;
+      } else {
+        // Subsequent renders: only repaint dirty cells
+        for (const key of dirtyRef.current) {
+          const [r, c] = key.split(',').map(Number);
+          drawCell(ctx, r, c);
+        }
+        dirtyRef.current.clear();
       }
     };
 
     drawGrid();
+  }, [grid, step, fireSet, persons, paths, phase, currentFloor, hover, drawCell]);
 
-    // Event handlers with proper references
+  // Event binding - separate from drawing to avoid re-registering on every render
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
     const handleMouseDown = (e) => {
       setDragging(true);
       handleCanvasInteract(e);
@@ -287,7 +331,7 @@ export default function EvacuationSimulator() {
       canvas.removeEventListener('mouseup', handleMouseUp);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [grid, step, fireSet, persons, paths, phase, tool, currentFloor, zoom, dragging, hover]);
+  }, [phase, tool, zoom]);
 
   const startSim = () => {
     const exits = [];
@@ -376,28 +420,27 @@ export default function EvacuationSimulator() {
         return next;
       });
 
-      // Move persons
-      setPersons((prev) =>
-        prev.map((p) => {
+      // Move persons and compute display paths in single update
+      setPersons((prev) => {
+        const updatedPersons = prev.map((p) => {
           if (p.reached || p.lost) return p;
-          const path = bfsPath(p.r, p.c, p.floor, floors, fireSet);
+          const path = getCachedPath(p.r, p.c, p.floor);
           if (!path || path.length < 2) {
             return { ...p, lost: true };
           }
           const [nr, nc, nf] = path[1];
           const reachedExit = floors[nf][nr][nc] === EXIT;
           return { ...p, r: nr, c: nc, floor: nf, reached: reachedExit };
-        })
-      );
+        });
 
-      // Compute display paths (only for current floor)
-      setPersons((prev) => {
-        const newPaths = prev
+        // Compute display paths from updated persons (only for current floor)
+        const newPaths = updatedPersons
           .filter((p) => !p.reached && !p.lost && p.floor === currentFloor)
-          .map((p) => bfsPath(p.r, p.c, p.floor, floors, fireSet))
+          .map((p) => getCachedPath(p.r, p.c, p.floor))
           .filter(Boolean);
         setPaths(newPaths);
-        return prev;
+
+        return updatedPersons;
       });
     }, 700);
 
@@ -441,7 +484,7 @@ export default function EvacuationSimulator() {
     return cell;
   }, [grid, fireSet, persons, paths, phase, currentFloor]);
 
-  const cellStyle = useCallback((display, r, c) => {
+  const cellStyle = (display, r, c, hover, phase, step) => {
     const isHovered = hover && hover[0] === r && hover[1] === c && phase === "build";
     let bg = COLORS[display] || COLORS.empty;
     let border = "transparent";
@@ -493,7 +536,7 @@ export default function EvacuationSimulator() {
       userSelect: "none",
       position: "relative",
     };
-  }, [hover, phase, step]);
+  };
 
   const cellEmoji = (display) => {
     if (display === EXIT) return "🚪";
