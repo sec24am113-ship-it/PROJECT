@@ -34,6 +34,14 @@ function useSimulation() {
 
       const parseData = await parseResponse.json()
       console.log('Building layout parsed:', parseData)
+      
+      // Validate parsed data
+      if (!parseData.rooms || typeof parseData.rooms !== 'object') {
+        throw new Error('Invalid building layout: missing rooms data')
+      }
+      if (!Array.isArray(parseData.corridors)) {
+        throw new Error('Invalid building layout: missing corridors data')
+      }
 
       // Setup simulation on backend
       const setupResponse = await fetch(
