@@ -73,6 +73,69 @@ async def upload_blueprint(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"Error parsing blueprint: {str(e)}")
 
 
+@app.post("/parse-blueprint-to-grid")
+async def parse_blueprint_to_grid(
+    file: UploadFile = File(...),
+    grid_rows: int = 50,
+    grid_cols: int = 50,
+    wall_threshold: int = 160,
+):
+    """
+    Upload a blueprint image and convert it directly to a 2D cell grid.
+
+    Query params (optional):
+      grid_rows       – grid height in cells  (default 50, max 200)
+      grid_cols       – grid width  in cells  (default 50, max 200)
+      wall_threshold  – grayscale cut-off for walls, 0-255 (default 160)
+
+    Returns:
+      {
+        "success": true,
+        "grid": [[cell_type, ...], ...],
+        "rows": int,
+        "cols": int,
+        "room_count": int,
+        "exit_count": int,
+      }
+
+    Cell types in the grid: "room" | "wall" | "exit" | "empty"
+    """
+    print(f"[ENDPOINT] Received - grid_rows={grid_rows} (type: {type(grid_rows)}), grid_cols={grid_cols} (type: {type(grid_cols)})")
+    # Clamp to sane limits (but allow 0 for auto-detection)
+    if grid_rows != 0:
+        grid_rows = max(10, min(200, grid_rows))
+    if grid_cols != 0:
+        grid_cols = max(10, min(200, grid_cols))
+    wall_threshold = max(0, min(255, wall_threshold))
+    print(f"[ENDPOINT] After clamping - grid_rows={grid_rows}, grid_cols={grid_cols}")
+
+    try:
+        content = await file.read()
+        result  = BlueprintParser.parse_image_to_grid(
+            content,
+            grid_rows=grid_rows,
+            grid_cols=grid_cols,
+            wall_threshold=wall_threshold,
+        )
+
+        if result.get("error"):
+            raise HTTPException(status_code=400, detail=result["error"])
+
+        return {
+            "success":    True,
+            "grid":       result["grid"],
+            "rows":       result["rows"],
+            "cols":       result["cols"],
+            "room_count": result["room_count"],
+            "exit_count": result["exit_count"],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Blueprint parse error: {str(exc)}")
+
+
 @app.post("/parse-text")
 async def parse_text_description(data: dict):
     """

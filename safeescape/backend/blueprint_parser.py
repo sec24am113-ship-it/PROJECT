@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image
 import io
+from collections import deque
 
 
 class BlueprintParser:
@@ -288,3 +289,176 @@ class BlueprintParser:
                     )
 
         return {"rooms": rooms, "corridors": corridors}
+
+    @staticmethod
+    def _detect_optimal_grid_size(gray_img: np.ndarray, wall_threshold: int = 160, min_cells: int = 30, max_cells: int = 200) -> tuple[int, int]:
+        """
+        Determine optimal grid size based on blueprint feature sizes using a more stable approach.
+        
+        Uses multiple thresholds and averages the results to reduce sensitivity to threshold changes.
+        
+        Args:
+            gray_img: Grayscale image (original resolution)
+            wall_threshold: Grayscale threshold for wall detection
+            min_cells: Minimum grid dimension
+            max_cells: Maximum grid dimension
+            
+        Returns:
+            Tuple of (rows, cols) for optimal grid size
+        """
+        h, w = gray_img.shape
+        print(f"[Auto-detect] Image size: {h}x{w}")
+        
+        # Test multiple thresholds and average the results for stability
+        test_thresholds = [wall_threshold - 20, wall_threshold, wall_threshold + 20]
+        all_rows = []
+        all_cols = []
+        
+        for threshold in test_thresholds:
+            threshold = max(50, min(240, threshold))  # keep in reasonable range
+            
+            # Binary: walls are bright (>= threshold)
+            _, binary = cv2.threshold(gray_img, threshold, 255, cv2.THRESH_BINARY)
+            
+            # Use morphological operations to find significant features
+            kernel = np.ones((3, 3), np.uint8)
+            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+            
+            # Count wall pixels
+            wall_pixels = np.sum(binary > 0)
+            total_pixels = h * w
+            wall_density = wall_pixels / total_pixels
+            
+            # Calculate grid size based on wall density
+            # Higher wall density = more detail needed = larger grid
+            # Lower wall density = simpler layout = smaller grid
+            target_density = 0.15  # target wall density per cell
+            
+            # Calculate cell size based on wall density
+            if wall_density > 0:
+                # More walls = smaller cells (higher resolution)
+                cell_size = int(30 * (0.15 / max(wall_density, 0.01)))
+                cell_size = max(5, min(50, cell_size))
+            else:
+                cell_size = 20
+            
+            rows = int(h / cell_size)
+            cols = int(w / cell_size)
+            
+            all_rows.append(rows)
+            all_cols.append(cols)
+        
+        # Average the results for stability
+        rows = int(np.mean(all_rows))
+        cols = int(np.mean(all_cols))
+        
+        print(f"[Auto-detect] Before clamp: rows={rows}, cols={cols}")
+        
+        # Clamp to reasonable limits
+        rows = max(min_cells, min(max_cells, rows))
+        cols = max(min_cells, min(max_cells, cols))
+        
+        print(f"[Auto-detect] Final: rows={rows}, cols={cols}")
+        
+        return rows, cols
+
+    @staticmethod
+    def parse_image_to_grid(
+        image_bytes: bytes,
+        grid_rows: int = 30,
+        grid_cols: int = 30,
+        wall_threshold: int = 160,
+    ) -> Dict[str, Any]:
+        """
+        Convert a blueprint image to a 2-D cell grid at the requested resolution.
+        The frontend will resize its GRID_SIZE to match rows/cols in the response.
+
+        If grid_rows and grid_cols are both 0, the grid size will be auto-detected
+        based on the image's feature sizes.
+
+        Algorithm:
+          1. Resize image to grid_cols x grid_rows (1 pixel = 1 cell).
+          2. Dark pixel  -> "wall"  (grayscale < wall_threshold).
+          3. Green pixel -> "exit"  (HSV hue 35-85).
+          4. BFS flood-fill from every edge cell through open pixels -> "empty" (outside).
+          5. Remaining open cells are enclosed -> "room".
+        """
+        print(f"[DEBUG] parse_image_to_grid ENTRY - grid_rows={grid_rows}, grid_cols={grid_cols}")
+        try:
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is None:
+                raise ValueError("Could not decode image.")
+
+            print(f"[DEBUG] parse_image_to_grid called with grid_rows={grid_rows}, grid_cols={grid_cols}")
+
+            # Auto-detect grid size if both dimensions are 0
+            if grid_rows == 0 and grid_cols == 0:
+                print(f"[DEBUG] Auto-detection triggered")
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                grid_rows, grid_cols = BlueprintParser._detect_optimal_grid_size(gray, wall_threshold)
+                print(f"[DEBUG] Auto-detection returned: {grid_rows}x{grid_cols}")
+
+            target = (grid_cols, grid_rows)  # cv2: (width, height)
+
+            # Green-exit mask
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            green_mask = cv2.inRange(hsv, np.array([35, 50, 50]), np.array([85, 255, 255]))
+            green_small = cv2.resize(green_mask, target, interpolation=cv2.INTER_NEAREST)
+
+            # Grayscale + resize
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray_small = cv2.resize(gray, target, interpolation=cv2.INTER_AREA)
+
+            # Initial labelling: wall / exit / None (open)
+            ROWS, COLS = grid_rows, grid_cols
+            raw: List[List] = []
+            for r in range(ROWS):
+                row = []
+                for c in range(COLS):
+                    if int(green_small[r, c]) > 0:
+                        row.append("exit")
+                    elif int(gray_small[r, c]) >= wall_threshold:  # bright = wall
+                        row.append("wall")
+                    else:
+                        row.append(None)                            # dark = open (room candidate)
+                raw.append(row)
+
+            # BFS from every dark edge cell -> "empty" (outside the building)
+            queue = deque()
+            for r in range(ROWS):
+                for c in range(COLS):
+                    if raw[r][c] is None and (r == 0 or r == ROWS - 1 or c == 0 or c == COLS - 1):
+                        raw[r][c] = "empty"
+                        queue.append((r, c))
+
+            dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+            while queue:
+                r, c = queue.popleft()
+                for dr, dc in dirs:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < ROWS and 0 <= nc < COLS and raw[nr][nc] is None:
+                        raw[nr][nc] = "empty"
+                        queue.append((nr, nc))
+
+            # Dark cells not reached by BFS = enclosed inside walls -> "room"
+            grid = [
+                ["room" if (cell is None or cell == "empty") else cell for cell in row]
+                for row in raw
+            ]
+
+            room_count = sum(cell == "room" for row in grid for cell in row)
+            exit_count = sum(cell == "exit" for row in grid for cell in row)
+
+            return {
+                "grid":       grid,
+                "rows":       ROWS,
+                "cols":       COLS,
+                "room_count": room_count,
+                "exit_count": exit_count,
+            }
+
+        except Exception as exc:
+            print(f"[BlueprintParser] parse_image_to_grid error: {exc}")
+            return {"grid": [], "rows": grid_rows, "cols": grid_cols,
+                    "room_count": 0, "exit_count": 0, "error": str(exc)}
