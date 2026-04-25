@@ -2,8 +2,11 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import BlueprintImporter from './BlueprintImporter';
 import "./EvacuationSimulator.css";
 
-const GRID_SIZE = 30;
 const CELL_SIZE = 20;
+
+function makeGrid(rows = 30, cols = 30) {
+  return Array(rows).fill(null).map(() => Array(cols).fill(CELL_TYPES.empty));
+}
 
 const CELL_TYPES = {
   empty: 'empty',
@@ -24,21 +27,18 @@ const TOOLS = [
 ];
 
 const COLORS = {
-  empty: '#0a0e17',
-  room: '#1e2d45',
-  wall: '#1a2233',
+  empty: '#d4c4a8',
+  room: '#ffffff',
+  wall: '#000000',
   exit: '#00ff88',
   fire: '#ff4400',
   person: '#60b8ff',
   path: '#ffd700',
 };
 
-function makeGrid() {
-  return Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(CELL_TYPES.empty));
-}
-
 export default function EvacuationSimulator() {
-  const [grid, setGrid] = useState(makeGrid());
+  const [gridSize, setGridSize] = useState({ rows: 30, cols: 30 });
+  const [grid, setGrid] = useState(() => makeGrid());
   const [selectedTool, setSelectedTool] = useState(CELL_TYPES.room);
   const [phase, setPhase] = useState('build');
   const [persons, setPersons] = useState([]);
@@ -148,8 +148,8 @@ export default function EvacuationSimulator() {
     const container = containerRef.current;
     if (!container) return;
     
-    const gridWidth = GRID_SIZE * CELL_SIZE;
-    const gridHeight = GRID_SIZE * CELL_SIZE;
+    const gridWidth = gridSize.cols * CELL_SIZE;
+    const gridHeight = gridSize.rows * CELL_SIZE;
     const containerWidth = container.offsetWidth;
     const containerHeight = container.offsetHeight;
     
@@ -160,30 +160,15 @@ export default function EvacuationSimulator() {
     setZoom(1.0);
     setPanX(centeredPanX);
     setPanY(centeredPanY);
-  }, []);
+  }, [gridSize]);
 
   const handleBlueprintImport = useCallback((importedGrid, rows, cols) => {
-    // Convert the imported grid to match the current grid size
-    // If the imported grid is larger or smaller, we'll pad or crop it
-    const newGrid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(CELL_TYPES.empty));
-    
-    for (let r = 0; r < Math.min(rows, GRID_SIZE); r++) {
-      for (let c = 0; c < Math.min(cols, GRID_SIZE); c++) {
-        const cell = importedGrid[r][c];
-        if (cell === 'room') {
-          newGrid[r][c] = CELL_TYPES.room;
-        } else if (cell === 'wall') {
-          newGrid[r][c] = CELL_TYPES.wall;
-        } else if (cell === 'exit') {
-          newGrid[r][c] = CELL_TYPES.exit;
-        }
-      }
-    }
-    
-    setGrid(newGrid);
+    setGridSize({ rows, cols });
+    setGrid(importedGrid.map(row => [...row]));
+    setPersons([]);
     setSelectedTool(CELL_TYPES.room);
     setPhase('build');
-    addLog(`✅ Blueprint imported · ${rows}×${cols} grid · switch tool to add exits`, 'safe');
+    addLog(`Blueprint imported: ${rows}x${cols}`, 'safe');
   }, [addLog]);
 
   useEffect(() => {
@@ -195,8 +180,8 @@ export default function EvacuationSimulator() {
     const exits = [];
     const rooms = [];
     
-    for (let r = 0; r < GRID_SIZE; r++) {
-      for (let c = 0; c < GRID_SIZE; c++) {
+    for (let r = 0; r < gridSize.rows; r++) {
+      for (let c = 0; c < gridSize.cols; c++) {
         if (grid[r][c] === CELL_TYPES.exit) exits.push([r, c]);
         if (grid[r][c] === CELL_TYPES.room) rooms.push([r, c]);
       }
@@ -231,7 +216,8 @@ export default function EvacuationSimulator() {
 
   const clearAll = useCallback(() => {
     reset();
-    setGrid(makeGrid());
+    setGrid(makeGrid(30, 30));
+    setGridSize({ rows: 30, cols: 30 });
   }, [reset]);
 
   const findPath = useCallback((startR, startC) => {
@@ -249,7 +235,7 @@ export default function EvacuationSimulator() {
         const nr = r + dr, nc = c + dc;
         const key = `${nr},${nc}`;
         
-        if (nr >= 0 && nr < GRID_SIZE && nc >= 0 && nc < GRID_SIZE && 
+        if (nr >= 0 && nr < gridSize.rows && nc >= 0 && nc < gridSize.cols && 
             !visited.has(key) && 
             !fireSet.has(key) &&
             (grid[nr][nc] === CELL_TYPES.room || grid[nr][nc] === CELL_TYPES.exit)) {
@@ -272,7 +258,7 @@ export default function EvacuationSimulator() {
           const [r, c] = key.split(',').map(Number);
           for (const [dr, dc] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
             const nr = r + dr, nc = c + dc;
-            if (nr >= 0 && nr < GRID_SIZE && nc >= 0 && nc < GRID_SIZE) {
+            if (nr >= 0 && nr < gridSize.rows && nc >= 0 && nc < gridSize.cols) {
               if (grid[nr][nc] === CELL_TYPES.room && Math.random() < 0.3) {
                 next.add(`${nr},${nc}`);
               }
@@ -485,8 +471,8 @@ export default function EvacuationSimulator() {
                 top: 0,
                 left: 0,
                 display: 'grid',
-                gridTemplateColumns: `repeat(${GRID_SIZE}, ${CELL_SIZE}px)`,
-                gridTemplateRows: `repeat(${GRID_SIZE}, ${CELL_SIZE}px)`,
+                gridTemplateColumns: `repeat(${gridSize.cols}, ${CELL_SIZE}px)`,
+                gridTemplateRows: `repeat(${gridSize.rows}, ${CELL_SIZE}px)`,
                 userSelect: 'none'
               }}
             >
@@ -517,19 +503,19 @@ export default function EvacuationSimulator() {
                     }}
                     onClick={(e) => {
                       const { row, col } = getGridCoordinates(e);
-                      if (row >= 0 && row < GRID_SIZE && col >= 0 && col < GRID_SIZE) {
+                      if (row >= 0 && row < gridSize.rows && col >= 0 && col < gridSize.cols) {
                         handleCellClick(row, col);
                       }
                     }}
                     onMouseDown={(e) => {
                       const { row, col } = getGridCoordinates(e);
-                      if (row >= 0 && row < GRID_SIZE && col >= 0 && col < GRID_SIZE) {
+                      if (row >= 0 && row < gridSize.rows && col >= 0 && col < gridSize.cols) {
                         handleMouseDown(row, col);
                       }
                     }}
                     onMouseEnter={(e) => {
                       const { row, col } = getGridCoordinates(e);
-                      if (row >= 0 && row < GRID_SIZE && col >= 0 && col < GRID_SIZE) {
+                      if (row >= 0 && row < gridSize.rows && col >= 0 && col < gridSize.cols) {
                         handleMouseEnter(row, col);
                       }
                     }}
@@ -546,7 +532,7 @@ export default function EvacuationSimulator() {
           </div>
           
           <div style={{ fontSize: 9, color: '#3a6a8a', marginTop: 8 }}>
-            {GRID_SIZE}×{GRID_SIZE} GRID · {persons.length} PERSON(S) · {fireSet.size} FIRE CELL(S)
+            {gridSize.rows}×{gridSize.cols} GRID · {persons.length} PERSON(S) · {fireSet.size} FIRE CELL(S)
           </div>
         </div>
       </div>

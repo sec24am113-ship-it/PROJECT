@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image
 import io
+from collections import deque
 
 
 class BlueprintParser:
@@ -292,92 +293,87 @@ class BlueprintParser:
     @staticmethod
     def parse_image_to_grid(
         image_bytes: bytes,
-        grid_rows: int = 50,
-        grid_cols: int = 50,
+        grid_rows: int = 30,
+        grid_cols: int = 30,
         wall_threshold: int = 160,
     ) -> Dict[str, Any]:
         """
-        Convert a blueprint image directly into a 2D grid of cell types.
+        Convert a blueprint image to a 2-D cell grid at the requested resolution.
+        The frontend will resize its GRID_SIZE to match rows/cols in the response.
 
         Algorithm:
-          1. Resize image to grid dimensions
-          2. Threshold: bright pixels → room, dark pixels → wall
-          3. Detect green-tinted pixels → exit
-          4. Return the 2D grid array ready for the frontend editor
-
-        Args:
-            image_bytes:     Raw image file bytes (PNG / JPG / etc.)
-            grid_rows:       Number of grid rows  (default 50)
-            grid_cols:       Number of grid cols  (default 50)
-            wall_threshold:  Grayscale value below which a pixel is a wall (0-255)
-
-        Returns:
-            {
-              "grid": [[cell_type, ...], ...],   # 2D list, row-major
-              "rows": int,
-              "cols": int,
-              "room_count": int,
-              "exit_count": int,
-            }
+          1. Resize image to grid_cols x grid_rows (1 pixel = 1 cell).
+          2. Dark pixel  -> "wall"  (grayscale < wall_threshold).
+          3. Green pixel -> "exit"  (HSV hue 35-85).
+          4. BFS flood-fill from every edge cell through open pixels -> "empty" (outside).
+          5. Remaining open cells are enclosed -> "room".
         """
         try:
-            # ── Load image ──────────────────────────────────────────────────
             nparr = np.frombuffer(image_bytes, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if img is None:
-                raise ValueError("Could not decode image – check the file format.")
+                raise ValueError("Could not decode image.")
 
-            # ── Build green-exit mask (HSV) ─────────────────────────────────
+            target = (grid_cols, grid_rows)  # cv2: (width, height)
+
+            # Green-exit mask
             hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-            green_lower = np.array([35, 50, 50])
-            green_upper = np.array([85, 255, 255])
-            green_mask = cv2.inRange(hsv, green_lower, green_upper)
-
-            # ── Grayscale + optional blur to reduce noise ────────────────────
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (3, 3), 0)
-
-            # ── Resize both masks to exactly the grid size ───────────────────
-            target = (grid_cols, grid_rows)           # cv2 uses (width, height)
-            gray_small  = cv2.resize(gray,       target, interpolation=cv2.INTER_AREA)
+            green_mask = cv2.inRange(hsv, np.array([35, 50, 50]), np.array([85, 255, 255]))
             green_small = cv2.resize(green_mask, target, interpolation=cv2.INTER_NEAREST)
 
-            # ── Build cell grid ──────────────────────────────────────────────
-            grid: List[List[str]] = []
-            room_count = 0
-            exit_count = 0
+            # Grayscale + resize
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray_small = cv2.resize(gray, target, interpolation=cv2.INTER_AREA)
 
-            for r in range(grid_rows):
-                row: List[str] = []
-                for c in range(grid_cols):
-                    pixel_val   = int(gray_small[r, c])
-                    is_green    = int(green_small[r, c]) > 0
-
-                    if is_green:
+            # Initial labelling: wall / exit / None (open)
+            ROWS, COLS = grid_rows, grid_cols
+            raw: List[List] = []
+            for r in range(ROWS):
+                row = []
+                for c in range(COLS):
+                    if int(green_small[r, c]) > 0:
                         row.append("exit")
-                        exit_count += 1
-                    elif pixel_val >= wall_threshold:
-                        row.append("room")
-                        room_count += 1
-                    else:
+                    elif int(gray_small[r, c]) >= wall_threshold:
                         row.append("wall")
-                grid.append(row)
+                    else:
+                        row.append(None)
+                raw.append(row)
+
+            # BFS from every edge cell -> label outside as "empty"
+            queue = deque()
+            for r in range(ROWS):
+                for c in range(COLS):
+                    if raw[r][c] is None and (r == 0 or r == ROWS - 1 or c == 0 or c == COLS - 1):
+                        raw[r][c] = "empty"
+                        queue.append((r, c))
+
+            dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+            while queue:
+                r, c = queue.popleft()
+                for dr, dc in dirs:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < ROWS and 0 <= nc < COLS and raw[nr][nc] is None:
+                        raw[nr][nc] = "empty"
+                        queue.append((nr, nc))
+
+            # Anything still None is enclosed -> "room"
+            grid = [
+                [cell if cell is not None else "room" for cell in row]
+                for row in raw
+            ]
+
+            room_count = sum(cell == "room" for row in grid for cell in row)
+            exit_count = sum(cell == "exit" for row in grid for cell in row)
 
             return {
                 "grid":       grid,
-                "rows":       grid_rows,
-                "cols":       grid_cols,
+                "rows":       ROWS,
+                "cols":       COLS,
                 "room_count": room_count,
                 "exit_count": exit_count,
             }
 
         except Exception as exc:
             print(f"[BlueprintParser] parse_image_to_grid error: {exc}")
-            return {
-                "grid":       [],
-                "rows":       grid_rows,
-                "cols":       grid_cols,
-                "room_count": 0,
-                "exit_count": 0,
-                "error":      str(exc),
-            }
+            return {"grid": [], "rows": grid_rows, "cols": grid_cols,
+                    "room_count": 0, "exit_count": 0, "error": str(exc)}
