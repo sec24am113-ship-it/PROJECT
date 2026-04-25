@@ -17,6 +17,7 @@ export default function BlueprintImporter({ onGridImported }) {
   const [imageUrl,    setImageUrl]    = useState(null);
   const [gridRows,    setGridRows]    = useState(50);
   const [gridCols,    setGridCols]    = useState(50);
+  const [autoDetect,  setAutoDetect]  = useState(true);
   const [threshold,   setThreshold]   = useState(160);
   const [loading,     setLoading]     = useState(false);
   const [preview,     setPreview]     = useState(null); // parsed grid for visual preview
@@ -77,8 +78,14 @@ export default function BlueprintImporter({ onGridImported }) {
       form.append("file", imageFile);
 
       const url = new URL("http://localhost:8000/parse-blueprint-to-grid");
-      url.searchParams.set("grid_rows",      gridRows);
-      url.searchParams.set("grid_cols",      gridCols);
+      
+      if (autoDetect) {
+        url.searchParams.set("grid_rows", "0");
+        url.searchParams.set("grid_cols", "0");
+      } else {
+        url.searchParams.set("grid_rows", gridRows);
+        url.searchParams.set("grid_cols", gridCols);
+      }
       url.searchParams.set("wall_threshold", threshold);
 
       const res = await fetch(url.toString(), { method: "POST", body: form });
@@ -164,27 +171,41 @@ export default function BlueprintImporter({ onGridImported }) {
       <div className="bp-settings">
         <div className="bp-settings-title">// GRID SETTINGS</div>
 
-        <label className="bp-label">
-          Rows
-          <span className="bp-val">{gridRows}</span>
+        <label className="bp-label bp-label--checkbox">
+          <input
+            type="checkbox"
+            checked={autoDetect}
+            onChange={(e) => setAutoDetect(e.target.checked)}
+            className="bp-checkbox"
+          />
+          <span>Auto-detect grid size</span>
         </label>
-        <input
-          type="range" min="10" max="200" step="5"
-          value={gridRows}
-          onChange={(e) => setGridRows(Number(e.target.value))}
-          className="bp-slider"
-        />
 
-        <label className="bp-label">
-          Columns
-          <span className="bp-val">{gridCols}</span>
-        </label>
-        <input
-          type="range" min="10" max="200" step="5"
-          value={gridCols}
-          onChange={(e) => setGridCols(Number(e.target.value))}
-          className="bp-slider"
-        />
+        {!autoDetect && (
+          <>
+            <label className="bp-label">
+              Rows
+              <span className="bp-val">{gridRows}</span>
+            </label>
+            <input
+              type="range" min="10" max="200" step="5"
+              value={gridRows}
+              onChange={(e) => setGridRows(Number(e.target.value))}
+              className="bp-slider"
+            />
+
+            <label className="bp-label">
+              Columns
+              <span className="bp-val">{gridCols}</span>
+            </label>
+            <input
+              type="range" min="10" max="200" step="5"
+              value={gridCols}
+              onChange={(e) => setGridCols(Number(e.target.value))}
+              className="bp-slider"
+            />
+          </>
+        )}
 
         <label className="bp-label">
           Wall threshold

@@ -100,10 +100,14 @@ async def parse_blueprint_to_grid(
 
     Cell types in the grid: "room" | "wall" | "exit" | "empty"
     """
-    # Clamp to sane limits
-    grid_rows      = max(10, min(200, grid_rows))
-    grid_cols      = max(10, min(200, grid_cols))
-    wall_threshold = max(0,  min(255, wall_threshold))
+    print(f"[ENDPOINT] Received - grid_rows={grid_rows} (type: {type(grid_rows)}), grid_cols={grid_cols} (type: {type(grid_cols)})")
+    # Clamp to sane limits (but allow 0 for auto-detection)
+    if grid_rows != 0:
+        grid_rows = max(10, min(200, grid_rows))
+    if grid_cols != 0:
+        grid_cols = max(10, min(200, grid_cols))
+    wall_threshold = max(0, min(255, wall_threshold))
+    print(f"[ENDPOINT] After clamping - grid_rows={grid_rows}, grid_cols={grid_cols}")
 
     try:
         content = await file.read()

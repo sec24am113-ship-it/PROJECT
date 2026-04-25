@@ -83,6 +83,21 @@
   margin-bottom: 2px;
 }
 
+.bp-label--checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.bp-checkbox {
+  width: 14px;
+  height: 14px;
+  accent-color: #3a7acc;
+  cursor: pointer;
+}
+
 .bp-label {
   display: flex;
   align-items: center;
