@@ -288,3 +288,96 @@ class BlueprintParser:
                     )
 
         return {"rooms": rooms, "corridors": corridors}
+
+    @staticmethod
+    def parse_image_to_grid(
+        image_bytes: bytes,
+        grid_rows: int = 50,
+        grid_cols: int = 50,
+        wall_threshold: int = 160,
+    ) -> Dict[str, Any]:
+        """
+        Convert a blueprint image directly into a 2D grid of cell types.
+
+        Algorithm:
+          1. Resize image to grid dimensions
+          2. Threshold: bright pixels → room, dark pixels → wall
+          3. Detect green-tinted pixels → exit
+          4. Return the 2D grid array ready for the frontend editor
+
+        Args:
+            image_bytes:     Raw image file bytes (PNG / JPG / etc.)
+            grid_rows:       Number of grid rows  (default 50)
+            grid_cols:       Number of grid cols  (default 50)
+            wall_threshold:  Grayscale value below which a pixel is a wall (0-255)
+
+        Returns:
+            {
+              "grid": [[cell_type, ...], ...],   # 2D list, row-major
+              "rows": int,
+              "cols": int,
+              "room_count": int,
+              "exit_count": int,
+            }
+        """
+        try:
+            # ── Load image ──────────────────────────────────────────────────
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is None:
+                raise ValueError("Could not decode image – check the file format.")
+
+            # ── Build green-exit mask (HSV) ─────────────────────────────────
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            green_lower = np.array([35, 50, 50])
+            green_upper = np.array([85, 255, 255])
+            green_mask = cv2.inRange(hsv, green_lower, green_upper)
+
+            # ── Grayscale + optional blur to reduce noise ────────────────────
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray = cv2.GaussianBlur(gray, (3, 3), 0)
+
+            # ── Resize both masks to exactly the grid size ───────────────────
+            target = (grid_cols, grid_rows)           # cv2 uses (width, height)
+            gray_small  = cv2.resize(gray,       target, interpolation=cv2.INTER_AREA)
+            green_small = cv2.resize(green_mask, target, interpolation=cv2.INTER_NEAREST)
+
+            # ── Build cell grid ──────────────────────────────────────────────
+            grid: List[List[str]] = []
+            room_count = 0
+            exit_count = 0
+
+            for r in range(grid_rows):
+                row: List[str] = []
+                for c in range(grid_cols):
+                    pixel_val   = int(gray_small[r, c])
+                    is_green    = int(green_small[r, c]) > 0
+
+                    if is_green:
+                        row.append("exit")
+                        exit_count += 1
+                    elif pixel_val >= wall_threshold:
+                        row.append("room")
+                        room_count += 1
+                    else:
+                        row.append("wall")
+                grid.append(row)
+
+            return {
+                "grid":       grid,
+                "rows":       grid_rows,
+                "cols":       grid_cols,
+                "room_count": room_count,
+                "exit_count": exit_count,
+            }
+
+        except Exception as exc:
+            print(f"[BlueprintParser] parse_image_to_grid error: {exc}")
+            return {
+                "grid":       [],
+                "rows":       grid_rows,
+                "cols":       grid_cols,
+                "room_count": 0,
+                "exit_count": 0,
+                "error":      str(exc),
+            }

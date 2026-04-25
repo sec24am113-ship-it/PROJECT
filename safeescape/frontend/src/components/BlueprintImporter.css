@@ -1,0 +1,271 @@
+/* ── BlueprintImporter.css ─────────────────────────────────────────────── */
+
+.bp-importer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: "Courier New", monospace;
+  color: #a0c8e8;
+}
+
+/* ── Drop zone ── */
+.bp-dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  border: 2px dashed #1e4a7a;
+  border-radius: 6px;
+  background: #060e1c;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  overflow: hidden;
+}
+
+.bp-dropzone:hover {
+  border-color: #3a7acc;
+  background: #081220;
+}
+
+.bp-dropzone--has-image {
+  border-style: solid;
+  border-color: #1e3a5a;
+  min-height: 160px;
+}
+
+.bp-source-img {
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  display: block;
+}
+
+.bp-dropzone-hint {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px;
+}
+
+.bp-icon {
+  font-size: 28px;
+  margin-bottom: 4px;
+}
+
+.bp-dropzone-hint p {
+  font-size: 12px;
+  color: #4a7aaa;
+  margin: 0;
+}
+
+.bp-sub {
+  font-size: 10px !important;
+  color: #2a4a6a !important;
+}
+
+/* ── Settings ── */
+.bp-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #060c18;
+  border: 1px solid #1a3a5a;
+  border-radius: 4px;
+  padding: 10px;
+}
+
+.bp-settings-title {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #3a6a8a;
+  margin-bottom: 2px;
+}
+
+.bp-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #5a8aaa;
+  margin-top: 4px;
+}
+
+.bp-val {
+  font-weight: bold;
+  color: #60b8ff;
+  min-width: 28px;
+}
+
+.bp-hint {
+  font-size: 9px;
+  color: #2a4a6a;
+  margin-left: auto;
+}
+
+.bp-slider {
+  width: 100%;
+  height: 4px;
+  accent-color: #3a7acc;
+  cursor: pointer;
+  background: #1a3a5a;
+  border-radius: 2px;
+  outline: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* ── Buttons ── */
+.bp-btn {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 4px;
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+  border: 1px solid;
+}
+
+.bp-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.bp-btn--parse {
+  background: #0d1a2e;
+  border-color: #3a7acc;
+  color: #60b8ff;
+}
+
+.bp-btn--parse:hover:not(:disabled) {
+  background: #1a3a6a;
+}
+
+.bp-btn--import {
+  background: #081e12;
+  border-color: #00cc66;
+  color: #00cc66;
+  font-weight: bold;
+}
+
+.bp-btn--import:hover {
+  background: #00cc6622;
+}
+
+.bp-btn--reparse {
+  background: transparent;
+  border-color: #1e3a5a;
+  color: #4a7aaa;
+  font-size: 10px;
+  padding: 6px 12px;
+}
+
+.bp-btn--reparse:hover:not(:disabled) {
+  border-color: #3a6a9a;
+  color: #6a9acc;
+}
+
+/* ── Error ── */
+.bp-error {
+  background: #1a0808;
+  border: 1px solid #cc4444;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #ff7777;
+}
+
+/* ── Preview ── */
+.bp-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #060c18;
+  border: 1px solid #1a3a5a;
+  border-radius: 4px;
+  padding: 10px;
+}
+
+.bp-preview-title {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #3a6a8a;
+}
+
+.bp-canvas {
+  display: block;
+  width: 100%;
+  border-radius: 3px;
+  border: 1px solid #1a3a5a;
+  image-rendering: pixelated;
+}
+
+/* ── Stats row ── */
+.bp-stats {
+  display: flex;
+  gap: 8px;
+}
+
+.bp-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #081220;
+  border: 1px solid #1a3a5a;
+  border-radius: 4px;
+  padding: 6px 4px;
+  gap: 2px;
+}
+
+.bp-stat-val {
+  font-size: 16px;
+  font-weight: bold;
+  color: #a0c8e8;
+}
+
+.bp-stat-lbl {
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #3a6a8a;
+}
+
+/* ── Legend ── */
+.bp-legend {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.bp-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #4a7aaa;
+}
+
+.bp-legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1px solid #1e3a5a;
+  flex-shrink: 0;
+}
+
+/* ── Tip ── */
+.bp-tip {
+  font-size: 9px;
+  color: #2a4a6a;
+  line-height: 1.5;
+  padding: 6px 8px;
+  background: #040810;
+  border-radius: 3px;
+  border-left: 2px solid #1e3a5a;
+  margin: 0;
+}
